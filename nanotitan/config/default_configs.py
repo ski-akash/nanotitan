@@ -321,9 +321,81 @@ def get_deepseek_v3_small_config() -> JobConfig:
     return config
 
 
+def get_deepseek_v3_bench_small_2gpu_config() -> JobConfig:
+    """Baseline for the 2x A100 benchmarking suite (benchmarks/): the "small" model,
+    DDP-replicated across both GPUs (data_parallel_replicate_degree=2), which is the
+    parallelism strategy apply_ddp's bucket_cap_mb=100 gradient bucketing actually
+    applies to. global_batch_size is set explicitly so gradient_accumulation_steps
+    works out to 1 here -- other bench_small_ga* configs vary only that."""
+    config = get_deepseek_v3_small_config()
+
+    config.job.dump_folder = "./outputs/bench_small_2gpu"
+
+    config.parallelism.data_parallel_replicate_degree = 2
+    config.parallelism.data_parallel_shard_degree = 1
+
+    config.training.global_batch_size = (
+        config.training.local_batch_size * 2
+    )  # ga=1 at dp_degree=2
+
+    return config
+
+
+def get_deepseek_v3_bench_small_ga4_config() -> JobConfig:
+    """Gradient-accumulation ablation, ga=4, at the same dp_degree=2 as
+    bench_small_2gpu."""
+    config = get_deepseek_v3_bench_small_2gpu_config()
+    config.job.dump_folder = "./outputs/bench_small_ga4"
+    config.training.global_batch_size = config.training.local_batch_size * 2 * 4
+    return config
+
+
+def get_deepseek_v3_bench_small_ga8_config() -> JobConfig:
+    """Gradient-accumulation ablation, ga=8, at the same dp_degree=2 as
+    bench_small_2gpu."""
+    config = get_deepseek_v3_bench_small_2gpu_config()
+    config.job.dump_folder = "./outputs/bench_small_ga8"
+    config.training.global_batch_size = config.training.local_batch_size * 2 * 8
+    return config
+
+
+def get_deepseek_v3_bench_small_dense_config() -> JobConfig:
+    """MoE ablation: dense baseline -- every layer uses the shared FeedForward
+    instead of the MoE layer (n_dense_layers == n_layers), for comparison against
+    bench_small_2gpu's MoE (top_k=2 of 8 experts)."""
+    config = get_deepseek_v3_bench_small_2gpu_config()
+    config.job.dump_folder = "./outputs/bench_small_dense"
+    config.model.args.n_dense_layers = config.model.args.n_layers
+    return config
+
+
+def get_deepseek_v3_bench_small_topk1_config() -> JobConfig:
+    """MoE ablation: fewer active experts per token (top_k=1 of 8) than
+    bench_small_2gpu's top_k=2, to compare active-vs-total-param tradeoffs."""
+    config = get_deepseek_v3_bench_small_2gpu_config()
+    config.job.dump_folder = "./outputs/bench_small_topk1"
+    config.model.args.moe_args.top_k = 1
+    return config
+
+
+def get_deepseek_v3_bench_small_topk4_config() -> JobConfig:
+    """MoE ablation: more active experts per token (top_k=4 of 8) than
+    bench_small_2gpu's top_k=2, to compare active-vs-total-param tradeoffs."""
+    config = get_deepseek_v3_bench_small_2gpu_config()
+    config.job.dump_folder = "./outputs/bench_small_topk4"
+    config.model.args.moe_args.top_k = 4
+    return config
+
+
 config_map = {
     "tiny": get_deepseek_v3_tiny_config,
     "small": get_deepseek_v3_small_config,
+    "bench_small_2gpu": get_deepseek_v3_bench_small_2gpu_config,
+    "bench_small_ga4": get_deepseek_v3_bench_small_ga4_config,
+    "bench_small_ga8": get_deepseek_v3_bench_small_ga8_config,
+    "bench_small_dense": get_deepseek_v3_bench_small_dense_config,
+    "bench_small_topk1": get_deepseek_v3_bench_small_topk1_config,
+    "bench_small_topk4": get_deepseek_v3_bench_small_topk4_config,
     "hsdp": get_deepseek_v3_hsdp_config,
     "ddp": get_deepseek_v3_ddp_config,
     "fsdp": get_deepseek_v3_fsdp_config,

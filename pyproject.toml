@@ -29,6 +29,9 @@ dev = [
     "ty>=0.0.31",
     "vulture>=2.14",
 ]
+benchmarks = [
+    "matplotlib>=3.9.0",
+]
 
 [tool.setuptools.packages.find]
 where = [""]
