@@ -215,7 +215,7 @@ def get_deepseek_v3_tiny_model_args() -> DeepSeekV3ModelArgs:
 
 
 def get_deepseek_v3_tiny_config() -> JobConfig:
-    """Fast-iteration config: fits comfortably on a single P100 with room to spare,
+    """Fast-iteration config: fits comfortably on a single A100 with room to spare,
     for quickly checking that a change works end to end rather than for measuring
     anything."""
     config = JobConfig()
@@ -232,10 +232,6 @@ def get_deepseek_v3_tiny_config() -> JobConfig:
     config.lr_scheduler.warmup_steps = 10
     config.lr_scheduler.decay_type = "cosine"
 
-    # P100s have no bf16 support, so train fully in float32 rather than the
-    # reference's bfloat16 default (see spec.md open questions).
-    config.training.dtype = "float32"
-    config.training.mixed_precision_param = "float32"
     config.training.local_batch_size = 4
     config.training.seq_len = 256
     config.training.max_norm = 1.0
@@ -250,15 +246,14 @@ def get_deepseek_v3_tiny_config() -> JobConfig:
     config.activation_checkpoint.mode = "selective"
     config.activation_checkpoint.selective_ac_option = "op"
 
-    # torch.compile is unreliable on Pascal (sm60) -- keep off by default.
-    config.compile.enable = False
+    config.compile.enable = True
 
     return config
 
 
 def get_deepseek_v3_small_model_args() -> DeepSeekV3ModelArgs:
     # Big enough to be a meaningful benchmark target -- still runs unsharded on one
-    # P100 (~170M params; well under 16GB even with AdamW's fp32 states), so it works
+    # A100 (~170M params; well under 40/80GB even with AdamW's fp32 states), so it works
     # as the single-GPU baseline for the 1/2/4-GPU scaling study.
     return DeepSeekV3ModelArgs(
         vocab_size=102400,
@@ -286,7 +281,7 @@ def get_deepseek_v3_small_model_args() -> DeepSeekV3ModelArgs:
 
 def get_deepseek_v3_small_config() -> JobConfig:
     """Benchmark-run config: sized to meaningfully exercise MLA/MoE while staying
-    well within a P100's 16GB even unsharded, so it can serve as the baseline for
+    well within an A100's 40/80GB even unsharded, so it can serve as the baseline for
     the 1/2/4-GPU scaling study and the bucketing/overlap/grad-accum ablations."""
     config = JobConfig()
 
@@ -307,8 +302,6 @@ def get_deepseek_v3_small_config() -> JobConfig:
     config.lr_scheduler.decay_type = "cosine"
     config.lr_scheduler.min_lr_factor = 0.1
 
-    config.training.dtype = "float32"
-    config.training.mixed_precision_param = "float32"
     config.training.local_batch_size = 8
     config.training.seq_len = 2048
     config.training.max_norm = 1.0
@@ -323,7 +316,7 @@ def get_deepseek_v3_small_config() -> JobConfig:
     config.activation_checkpoint.mode = "selective"
     config.activation_checkpoint.selective_ac_option = "op"
 
-    config.compile.enable = False
+    config.compile.enable = True
 
     return config
 

@@ -4,7 +4,7 @@ set -e
 
 if [ $# -lt 2 ]; then
     echo "Usage: $0 <singlenode|multinode|NUM_NODES> <config_name> [extra args...]"
-    echo "  Each node on the gpu-P100/gpu-A100 partitions has 2 GPUs, so:"
+    echo "  Each node on the gpu-A100/gpu-P100 partitions has 2 GPUs, so:"
     echo "    singlenode -> 1 node  -> 2 GPUs"
     echo "    multinode  -> 2 nodes -> 4 GPUs"
     exit 1
@@ -20,9 +20,9 @@ esac
 CONFIG=$2
 shift 2
 
-# Which SLURM partition to submit to: gpu-P100 (default) or gpu-A100 for
-# occasional A100 runs. Override with PARTITION=gpu-A100 ./launch.sh ...
-PARTITION="${PARTITION:-gpu-P100}"
+# Which SLURM partition to submit to: gpu-A100 (default) or gpu-P100 for
+# occasional P100 runs. Override with PARTITION=gpu-P100 ./launch.sh ...
+PARTITION="${PARTITION:-gpu-A100}"
 
 if [ "$CONFIG" = "all" ]; then
     CONFIGS=$(grep -oP '^\s+"\K[^"]+(?=":)' nanotitan/config/default_configs.py)
