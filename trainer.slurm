@@ -10,6 +10,9 @@
 # occasional P100 runs); no default here so a bare `sbatch trainer.slurm` fails loudly
 # instead of silently landing on the wrong hardware.
 
+cd "$TMPDIR" || exit 1
+cd /userhome/mtech/akashc1005/nanotitan/ || exit 1
+
 nodes=( $( scontrol show hostnames $SLURM_JOB_NODELIST ) )
 nodes_array=($nodes)
 head_node=${nodes_array[0]}
@@ -19,6 +22,10 @@ echo Node IP: $head_node_ip
 
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export NCCL_DEBUG=INFO
+
+# No WandB credentials configured on csecluster -- log locally instead of failing
+# the job outright. Sync later with `wandb sync` once a WANDB_API_KEY is set up.
+export WANDB_MODE=offline
 
 export NANOTITAN_CONFIG="$SLURM_JOB_NAME"
 

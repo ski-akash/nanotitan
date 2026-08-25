@@ -26,6 +26,7 @@ BENCH_CONFIGS = [
     "bench_small_dense",
     "bench_small_topk1",
     "bench_small_topk4",
+    "bench_1b_2gpu",
 ]
 
 METRIC_KEYS = [
@@ -66,16 +67,18 @@ def collect(entity: str | None, project: str, skip_steps: int) -> list[dict]:
     return rows
 
 
-def write_csv(rows: list[dict], out_path: Path) -> None:
+def write_csv(rows: list[dict], out_path: Path, keys: list[str] = METRIC_KEYS) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["config", *METRIC_KEYS])
+        writer = csv.DictWriter(f, fieldnames=["config", *keys])
         writer.writeheader()
         writer.writerows(rows)
 
 
-def write_summary_md(rows: list[dict], out_path: Path) -> None:
-    header = ["config", *METRIC_KEYS]
+def write_summary_md(
+    rows: list[dict], out_path: Path, keys: list[str] = METRIC_KEYS
+) -> None:
+    header = ["config", *keys]
     lines = [
         "| " + " | ".join(header) + " |",
         "|" + "|".join(["---"] * len(header)) + "|",

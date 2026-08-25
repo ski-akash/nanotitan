@@ -338,6 +338,71 @@ def get_deepseek_v3_bench_small_2gpu_config() -> JobConfig:
         config.training.local_batch_size * 2
     )  # ga=1 at dp_degree=2
 
+    # csecluster's GPU compute nodes have no internet access (only the login node
+    # does), so the reference's live-streamed "fineweb" dataset can't be reached from
+    # a training job. Points at a local copy (one parquet shard, mirroring the HF
+    # repo's own data/<dump>/*.parquet layout + its README.md config, downloaded via
+    # the login node) instead -- see benchmarks/README.md.
+    config.training.dataset_path = (
+        "/userhome/mtech/akashc1005/nanotitan/assets/data/fineweb"
+    )
+
+    # csecluster's GPU compute nodes have no python3-dev (no Python.h), which
+    # torch.compile's inductor backend needs to build its C extensions, and there's
+    # no root access to install it. Disabled for these bench runs until that's
+    # resolved -- see benchmarks/README.md.
+    config.compile.enable = False
+
+    return config
+
+
+def get_deepseek_v3_bench_1b_model_args() -> DeepSeekV3ModelArgs:
+    # ~976M total params (dense 387M + all-experts sparse 589M; ~584M active per
+    # forward pass with top_k=2 of 8 experts). At fp32, weights+grads+AdamW states
+    # alone are ~15.6GB -- leaves headroom on a 40GB A100 for activations, but not
+    # as much margin as the 163M "small" model, hence the smaller batch/seq_len
+    # below versus bench_small_2gpu.
+    return DeepSeekV3ModelArgs(
+        vocab_size=102400,
+        dim=1408,
+        inter_dim=3840,
+        moe_inter_dim=1408,
+        n_layers=12,
+        n_dense_layers=1,
+        n_heads=16,
+        moe_args=MoEArgs(
+            num_experts=8,
+            num_shared_experts=1,
+            top_k=2,
+            score_func="softmax",
+            route_norm=False,
+            score_before_experts=False,
+        ),
+        q_lora_rank=0,
+        kv_lora_rank=256,
+        qk_nope_head_dim=88,
+        qk_rope_head_dim=32,
+        v_head_dim=128,
+    )
+
+
+def get_deepseek_v3_bench_1b_2gpu_config() -> JobConfig:
+    """~1B-param counterpart to bench_small_2gpu -- same DDP-on-2-GPUs setup, local
+    dataset, and compile disabled (all for the same csecluster reasons), but a
+    smaller batch_size/seq_len than the 163M model since there's less memory
+    headroom left for activations. Fewer steps too (50, not 200) since this is a
+    memory/throughput sanity check on a bigger model, not a full ablation."""
+    config = get_deepseek_v3_bench_small_2gpu_config()
+
+    config.job.dump_folder = "./outputs/bench_1b_2gpu"
+
+    config.model.args = get_deepseek_v3_bench_1b_model_args()
+
+    config.training.local_batch_size = 4
+    config.training.seq_len = 1024
+    config.training.steps = 50
+    config.training.global_batch_size = config.training.local_batch_size * 2  # ga=1
+
     return config
 
 
@@ -391,6 +456,7 @@ config_map = {
     "tiny": get_deepseek_v3_tiny_config,
     "small": get_deepseek_v3_small_config,
     "bench_small_2gpu": get_deepseek_v3_bench_small_2gpu_config,
+    "bench_1b_2gpu": get_deepseek_v3_bench_1b_2gpu_config,
     "bench_small_ga4": get_deepseek_v3_bench_small_ga4_config,
     "bench_small_ga8": get_deepseek_v3_bench_small_ga8_config,
     "bench_small_dense": get_deepseek_v3_bench_small_dense_config,

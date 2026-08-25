@@ -5,17 +5,18 @@ its own -- this suite is entirely ours, built to the spec's benchmarking scheme.
 
 ## Current scope: 2x A100
 
-Real runs need 2 free A100s on `csecluster`, which aren't reliably available yet (see
-the cluster inventory in `spec.md`). Everything below is scaffolded so that as soon as
-2 GPUs are free, it's a single `./benchmarks/run.sh` away from producing results --
-nothing else needs to be built first for these six configs.
+All seven configs below have now run for real on `csecluster` (`gpu-A100-01`/
+`gpu-A100-02`) -- see `benchmarks/summary.md` for results.
 
 ### Configs (`nanotitan/config/default_configs.py`, `config_map`)
 
-All six are DDP (`data_parallel_replicate_degree=2`, `data_parallel_shard_degree=1`)
-on the `small` model, since `apply_ddp`'s `bucket_cap_mb=100` gradient bucketing --
-the thing most worth measuring on PCIe/inter-node A100s -- only applies on that code
-path (FSDP buckets differently).
+The six `bench_small_*` configs are DDP (`data_parallel_replicate_degree=2`,
+`data_parallel_shard_degree=1`) on the `small` (163M-param) model, since
+`apply_ddp`'s `bucket_cap_mb=100` gradient bucketing -- the thing most worth
+measuring on PCIe/inter-node A100s -- only applies on that code path (FSDP buckets
+differently). `bench_1b_2gpu` is the same DDP setup on a ~976M-param model, with a
+smaller batch/seq_len/step-count, as a memory/throughput sanity check rather than a
+full ablation.
 
 | config | what it measures |
 |---|---|
@@ -25,30 +26,59 @@ path (FSDP buckets differently).
 | `bench_small_dense` | MoE ablation: dense baseline (`n_dense_layers == n_layers`) |
 | `bench_small_topk1` | MoE ablation: 1 active expert of 8 |
 | `bench_small_topk4` | MoE ablation: 4 active experts of 8 |
+| `bench_1b_2gpu` | ~976M-param model, same DDP setup, smaller batch/seq/steps |
+
+### csecluster-specific fixes baked into these configs
+
+None of these are architecture changes -- they're all working around real
+environment constraints discovered while first running these jobs:
+
+- **No compute-node internet access.** GPU nodes can't reach huggingface.co (only
+  the login node can -- confirmed via an SSL cert mismatch), so the reference's
+  live-streamed `fineweb` dataset can't load from a training job. Every
+  `bench_*` config sets `training.dataset_path` to a local copy (one parquet shard +
+  the HF repo's own README.md config, downloaded once via the login node to
+  `assets/data/fineweb`, then referenced by absolute path since compute nodes may
+  have a different cwd than expected).
+- **No WandB credentials on csecluster.** `trainer.slurm` sets `WANDB_MODE=offline`
+  so runs don't hard-fail without a `WANDB_API_KEY`. Use
+  `collect_results_local.py` (below) instead of `collect_results.py` until a key is
+  configured and the offline runs are `wandb sync`'d.
+- **No `python3-dev` on compute nodes** (no `Python.h`, no root to install it), so
+  `torch.compile`'s inductor backend can't build its C extensions. Every `bench_*`
+  config sets `compile.enable = False`.
+- **SLURM job-submit policy requires a `cd "$TMPDIR" || exit 1` line** in every job
+  script (a site policy on csecluster, unrelated to this project) -- `trainer.slurm`
+  has it near the top, followed immediately by `cd`-ing back to the project dir.
 
 ### Running
 
 ```
-PARTITION=gpu-A100 ./benchmarks/run.sh              # submits all six
+PARTITION=gpu-A100 ./benchmarks/run.sh              # submits all six bench_small_* configs
 PARTITION=gpu-A100 ./benchmarks/run.sh bench_small_2gpu bench_small_ga4  # a subset
+PARTITION=gpu-A100 ./benchmarks/run.sh bench_1b_2gpu # the 1B sanity check
 ```
 
 Each submission is a `singlenode` (2-GPU) SLURM job via `launch.sh`/`trainer.slurm`,
 same as any other named config. `WANDB_RUN_NAME` is set to the config name so results
-are identifiable afterwards.
+are identifiable afterwards. Your account's SLURM QOS caps submissions at 2 jobs at
+a time (`MaxSubmitPU=2`), so submit in batches of <=2.
 
 ### Collecting results
 
-Metrics only ever go to WandB (`MetricsProcessor` has no local-file logging path) --
-`collect_results.py` pulls them back via the WandB API, averages the steady-state
-rows (skips the first `--skip-steps`, default 5, to drop warmup/compile), and writes:
-
-- `benchmarks/raw/results.csv` -- raw per-config averages (gitignored)
-- `benchmarks/summary.md` -- the same, as a committed markdown table
+Metrics only ever go to WandB (`MetricsProcessor` has no local-file logging path).
+With a configured `WANDB_API_KEY`, `collect_results.py` pulls them back via the
+WandB API, averages the steady-state rows (skips the first `--skip-steps`, default
+5, to drop warmup), and writes `benchmarks/raw/results.csv` (gitignored) +
+`benchmarks/summary.md` (committed). Without one (the current state on
+csecluster -- see above), use `collect_results_local.py` instead, which parses the
+same metrics directly out of each config's `outputs/<config>/*.err` SLURM log --
+same output files, no WandB needed:
 
 ```
-python benchmarks/collect_results.py
-python benchmarks/plot_results.py   # renders throughput.png, mfu.png, memory.png
+python benchmarks/collect_results.py        # needs WANDB_API_KEY
+python benchmarks/collect_results_local.py  # no WandB needed, run this on csecluster
+python benchmarks/plot_results.py           # renders throughput.png, mfu.png, memory.png
 ```
 
 ## Open items -- not built yet, need a decision before touching ported code
