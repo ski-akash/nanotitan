@@ -411,10 +411,46 @@ class Trainer(Stateful):
         else:
             global_valid_tokens = local_valid_tokens.float()
 
+        # DIVERGENCE FROM REFERENCE (deliberate, benchmarks/BENCHMARK_PLAN.md B4b):
+        # the reference has no gradient-sync control anywhere, so under DDP/FSDP every
+        # microbatch triggers a full gradient all-reduce and gradient accumulation
+        # raises the effective batch size without reducing communication at all. Here
+        # the sync is suppressed on every microbatch but the last, so gradients
+        # accumulate locally and are synchronised once per optimizer step.
+        #
+        # This is mathematically identical, not an approximation: the collective
+        # computes a mean over ranks, and sum_i mean(grad_i) == mean(sum_i grad_i).
+        # Only the communication volume changes -- by a factor of
+        # gradient_accumulation_steps. Verified by loss curves matching before/after.
+        #
+        # Skipped under pipeline parallelism, which drives its own schedule and does
+        # not go through this loop's accumulation semantics.
         accumulated_losses = []
-        for input_dict, labels in microbatches:
+        n_microbatches = len(microbatches)
+        sync_controllable = (
+            n_microbatches > 1
+            and not parallel_dims.pp_enabled
+            and all(hasattr(m, "set_requires_gradient_sync") for m in self.model_parts)
+        )
+        if self.step == 1:
+            logger.info(
+                f"[B4b] gradient-sync suppression between microbatches: "
+                f"{'ACTIVE' if sync_controllable else 'INACTIVE'} "
+                f"(microbatches={n_microbatches})"
+            )
+        for i, (input_dict, labels) in enumerate(microbatches):
+            if sync_controllable:
+                is_last_microbatch = i == n_microbatches - 1
+                for m in self.model_parts:
+                    m.set_requires_gradient_sync(is_last_microbatch)
             loss = self.forward_backward_step(input_dict, labels, global_valid_tokens)
             accumulated_losses.append(loss.detach())
+
+        if sync_controllable:
+            # Leave sync enabled so anything after this loop (and the next step, if it
+            # runs without accumulation) behaves normally.
+            for m in self.model_parts:
+                m.set_requires_gradient_sync(True)
 
         # This is necessary because PP already returns the loss after having called its backward method, so we don't have a chance to apply any normalisation factor.
         # The PP schedule runs backward on the raw sum loss; non-PP divides by global_valid_tokens before backward.

@@ -387,6 +387,13 @@ def _get_bench_scale_base_config(dp_degree: int) -> JobConfig:
     # warmup, so per-step logging is what makes the remaining 30 a usable sample.
     config.metrics.log_freq = 1
 
+    # Training.seed defaults to None, which leaves weight init and data order
+    # unseeded and therefore different on every run. Throughput is unaffected, but
+    # loss curves are not comparable across runs without this -- and comparing loss
+    # curves is exactly how the B4b no_sync change is verified to be
+    # mathematically neutral rather than merely faster.
+    config.training.seed = 42
+
     return config
 
 
@@ -411,6 +418,53 @@ def get_deepseek_v3_bench_scale_4gpu_config() -> JobConfig:
     whole study exists to measure. Launch: ./launch.sh multinode"""
     config = _get_bench_scale_base_config(dp_degree=4)
     config.job.dump_folder = "./outputs/bench_scale_4gpu"
+    return config
+
+
+def _get_bench_ga_config(dp_degree: int, ga: int) -> JobConfig:
+    """Base for the B4b gradient-accumulation experiment.
+
+    Same model, seq_len and per-device microbatch as the B1 scaling points, so
+    throughput is directly comparable against them -- the only change is that each
+    optimizer step now consumes `ga` microbatches instead of 1.
+
+    Communication cost per all-reduce is set by model size (652 MB of fp32
+    gradients), not by batch size, so accumulating `ga` microbatches per sync should
+    cut communication per token by `ga`x -- but only if the gradient sync is
+    actually suppressed between microbatches. See BENCHMARK_PLAN.md section 2.
+    """
+    config = _get_bench_scale_base_config(dp_degree=dp_degree)
+
+    local_batch_size = config.training.local_batch_size
+    config.training.global_batch_size = local_batch_size * dp_degree * ga
+    config.training.steps = 12
+
+    return config
+
+
+def get_deepseek_v3_bench_ga8_1gpu_config() -> JobConfig:
+    """B4b baseline at world_size=1, ga=8. Needed as the efficiency denominator for
+    the ga=8 points: accumulation also amortises per-optimizer-step overhead (the
+    AdamW update and the grad-norm all-reduce for clipping), which benefits the
+    1-GPU case too, so comparing ga=8 runs against the ga=1 baseline would
+    overstate the scaling gain. Launch: GPUS_PER_NODE=1 ./launch.sh singlenode"""
+    config = _get_bench_ga_config(dp_degree=1, ga=8)
+    config.job.dump_folder = "./outputs/bench_ga8_1gpu"
+    return config
+
+
+def get_deepseek_v3_bench_ga8_2gpu_config() -> JobConfig:
+    """B4b at world_size=2, ga=8. Launch: ./launch.sh singlenode"""
+    config = _get_bench_ga_config(dp_degree=2, ga=8)
+    config.job.dump_folder = "./outputs/bench_ga8_2gpu"
+    return config
+
+
+def get_deepseek_v3_bench_ga8_4gpu_config() -> JobConfig:
+    """B4b at world_size=4, ga=8 -- all-reduce crosses the 1GbE boundary, so this is
+    where suppressing 7 of every 8 syncs should matter most. Launch: ./launch.sh multinode"""
+    config = _get_bench_ga_config(dp_degree=4, ga=8)
+    config.job.dump_folder = "./outputs/bench_ga8_4gpu"
     return config
 
 
@@ -518,6 +572,9 @@ config_map = {
     "bench_scale_1gpu": get_deepseek_v3_bench_scale_1gpu_config,
     "bench_scale_2gpu": get_deepseek_v3_bench_scale_2gpu_config,
     "bench_scale_4gpu": get_deepseek_v3_bench_scale_4gpu_config,
+    "bench_ga8_1gpu": get_deepseek_v3_bench_ga8_1gpu_config,
+    "bench_ga8_2gpu": get_deepseek_v3_bench_ga8_2gpu_config,
+    "bench_ga8_4gpu": get_deepseek_v3_bench_ga8_4gpu_config,
     "bench_small_ga4": get_deepseek_v3_bench_small_ga4_config,
     "bench_small_ga8": get_deepseek_v3_bench_small_ga8_config,
     "bench_small_dense": get_deepseek_v3_bench_small_dense_config,
