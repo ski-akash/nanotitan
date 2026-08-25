@@ -356,6 +356,64 @@ def get_deepseek_v3_bench_small_2gpu_config() -> JobConfig:
     return config
 
 
+def _get_bench_scale_base_config(dp_degree: int) -> JobConfig:
+    """Shared base for the B1 strong-scaling study (benchmarks/BENCHMARK_PLAN.md).
+
+    Strong scaling means fixed total work, split over more GPUs: global_batch_size,
+    seq_len and step count are identical at every point, so all three configs see
+    exactly the same 655,360 tokens and differ only in how many GPUs divide it.
+    local_batch_size therefore shrinks as dp_degree grows, keeping
+    gradient_accumulation_steps == 1 throughout (so this measures scaling, not
+    accumulation -- that's B4).
+
+    seq_len is 1024 rather than the 2048 used by bench_small_*, so the 1-GPU point
+    (which carries the whole global batch on one device) lands at roughly the same
+    activation memory as the already-verified 24.65 GiB 2-GPU run.
+    """
+    config = get_deepseek_v3_bench_small_2gpu_config()
+
+    global_batch_size = 16
+    assert global_batch_size % dp_degree == 0, (global_batch_size, dp_degree)
+
+    config.parallelism.data_parallel_replicate_degree = dp_degree
+    config.parallelism.data_parallel_shard_degree = 1
+
+    config.training.seq_len = 1024
+    config.training.local_batch_size = global_batch_size // dp_degree
+    config.training.global_batch_size = global_batch_size  # => ga == 1 at every point
+    config.training.steps = 40
+
+    # One row per step: only 40 steps total, and the first 10 are discarded as
+    # warmup, so per-step logging is what makes the remaining 30 a usable sample.
+    config.metrics.log_freq = 1
+
+    return config
+
+
+def get_deepseek_v3_bench_scale_1gpu_config() -> JobConfig:
+    """B1 strong-scaling, world_size=1. Launch: GPUS_PER_NODE=1 ./launch.sh singlenode"""
+    config = _get_bench_scale_base_config(dp_degree=1)
+    config.job.dump_folder = "./outputs/bench_scale_1gpu"
+    return config
+
+
+def get_deepseek_v3_bench_scale_2gpu_config() -> JobConfig:
+    """B1 strong-scaling, world_size=2, intra-node over PCIe/UPI (`SYS`, no NVLink).
+    Launch: ./launch.sh singlenode"""
+    config = _get_bench_scale_base_config(dp_degree=2)
+    config.job.dump_folder = "./outputs/bench_scale_2gpu"
+    return config
+
+
+def get_deepseek_v3_bench_scale_4gpu_config() -> JobConfig:
+    """B1 strong-scaling, world_size=4, spanning 2 nodes -- so gradient all-reduce
+    crosses the 1GbE inter-node link (no InfiniBand/RDMA). This is the point the
+    whole study exists to measure. Launch: ./launch.sh multinode"""
+    config = _get_bench_scale_base_config(dp_degree=4)
+    config.job.dump_folder = "./outputs/bench_scale_4gpu"
+    return config
+
+
 def get_deepseek_v3_bench_1b_model_args() -> DeepSeekV3ModelArgs:
     # ~976M total params (dense 387M + all-experts sparse 589M; ~584M active per
     # forward pass with top_k=2 of 8 experts). At fp32, weights+grads+AdamW states
@@ -457,6 +515,9 @@ config_map = {
     "small": get_deepseek_v3_small_config,
     "bench_small_2gpu": get_deepseek_v3_bench_small_2gpu_config,
     "bench_1b_2gpu": get_deepseek_v3_bench_1b_2gpu_config,
+    "bench_scale_1gpu": get_deepseek_v3_bench_scale_1gpu_config,
+    "bench_scale_2gpu": get_deepseek_v3_bench_scale_2gpu_config,
+    "bench_scale_4gpu": get_deepseek_v3_bench_scale_4gpu_config,
     "bench_small_ga4": get_deepseek_v3_bench_small_ga4_config,
     "bench_small_ga8": get_deepseek_v3_bench_small_ga8_config,
     "bench_small_dense": get_deepseek_v3_bench_small_dense_config,

@@ -23,6 +23,14 @@ echo Node IP: $head_node_ip
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export NCCL_DEBUG=INFO
 
+# Multi-node comms. csecluster has no InfiniBand/RDMA -- inter-node traffic goes
+# over plain 1GbE on eno5 (eno7/eno8/ens7f0/ens7f1 exist but are DOWN). Without
+# pinning the interface, NCCL and the c10d rendezvous can pick a down NIC and
+# hang instead of failing. Harmless on single-node jobs.
+export NCCL_SOCKET_IFNAME=eno5
+export GLOO_SOCKET_IFNAME=eno5
+export NCCL_IB_DISABLE=1
+
 # No WandB credentials configured on csecluster -- log locally instead of failing
 # the job outright. Sync later with `wandb sync` once a WANDB_API_KEY is set up.
 export WANDB_MODE=offline
@@ -31,7 +39,10 @@ export NANOTITAN_CONFIG="$SLURM_JOB_NAME"
 
 mkdir -p outputs/$NANOTITAN_CONFIG
 
-# Each node on gpu-A100/gpu-P100 has 2 GPUs -- nproc_per_node matches that, not the
-# reference's 8. --nnodes controls how many of those 2-GPU nodes join the job
-# (1 node = 2 GPUs, 2 nodes = 4 GPUs), set by launch.sh's --nodes flag to sbatch.
-srun uv run torchrun --nnodes $SLURM_JOB_NUM_NODES --nproc_per_node 2 --rdzv_id 101 --rdzv_backend c10d --rdzv_endpoint "$head_node_ip:29500" -m nanotitan.train "$@"
+# Each node on gpu-A100/gpu-P100 has 2 GPUs, which is the default. launch.sh
+# exports GPUS_PER_NODE (and passes the matching --gpus-per-node to sbatch) so the
+# scaling study can also run a 1-GPU point; world_size = nnodes x GPUS_PER_NODE.
+GPUS_PER_NODE="${GPUS_PER_NODE:-2}"
+echo "world_size = $SLURM_JOB_NUM_NODES nodes x $GPUS_PER_NODE gpus = $(( SLURM_JOB_NUM_NODES * GPUS_PER_NODE ))"
+
+srun uv run torchrun --nnodes $SLURM_JOB_NUM_NODES --nproc_per_node $GPUS_PER_NODE --rdzv_id 101 --rdzv_backend c10d --rdzv_endpoint "$head_node_ip:29500" -m nanotitan.train "$@"
