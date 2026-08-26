@@ -468,6 +468,56 @@ def get_deepseek_v3_bench_ga8_4gpu_config() -> JobConfig:
     return config
 
 
+def _get_bench_parallel_config(dp_replicate: int, dp_shard: int) -> JobConfig:
+    """Base for the B5 parallelism-strategy comparison (BENCHMARK_PLAN.md).
+
+    All three strategies run at the same world_size=4, same model, seq_len, global
+    batch and step count -- only how the 4 ranks are arranged changes:
+
+      DDP   dp_replicate=4, dp_shard=1  -- every rank holds a full model replica
+      FSDP  dp_replicate=1, dp_shard=4  -- params/grads/optimizer sharded 4 ways
+      HSDP  dp_replicate=2, dp_shard=2  -- sharded within a node, replicated across
+
+    HSDP's 2x2 layout maps onto this cluster's actual topology: sharding inside a
+    node (PCIe) and replicating across the 1GbE boundary, which is the arrangement
+    that should suffer least from the slow inter-node link.
+
+    Note the reference's own ddp/fsdp/hsdp presets assume a 16-GPU cluster
+    (dp_shard=16) and cannot run here; these are sized for our 4.
+    """
+    config = _get_bench_scale_base_config(dp_degree=4)
+
+    config.parallelism.data_parallel_replicate_degree = dp_replicate
+    config.parallelism.data_parallel_shard_degree = dp_shard
+
+    # Shorter than B1's 40: each 4-GPU run holds both nodes, and throughput here is
+    # very stable (B1 measured +/-1.0% at this scale).
+    config.training.steps = 15
+
+    return config
+
+
+def get_deepseek_v3_bench_par_ddp_4gpu_config() -> JobConfig:
+    """B5: pure DDP at world_size=4. Launch: ./launch.sh multinode"""
+    config = _get_bench_parallel_config(dp_replicate=4, dp_shard=1)
+    config.job.dump_folder = "./outputs/bench_par_ddp_4gpu"
+    return config
+
+
+def get_deepseek_v3_bench_par_fsdp_4gpu_config() -> JobConfig:
+    """B5: fully-sharded data parallel at world_size=4. Launch: ./launch.sh multinode"""
+    config = _get_bench_parallel_config(dp_replicate=1, dp_shard=4)
+    config.job.dump_folder = "./outputs/bench_par_fsdp_4gpu"
+    return config
+
+
+def get_deepseek_v3_bench_par_hsdp_4gpu_config() -> JobConfig:
+    """B5: hybrid-sharded (2 shard x 2 replicate) at world_size=4. Launch: ./launch.sh multinode"""
+    config = _get_bench_parallel_config(dp_replicate=2, dp_shard=2)
+    config.job.dump_folder = "./outputs/bench_par_hsdp_4gpu"
+    return config
+
+
 def get_deepseek_v3_bench_1b_model_args() -> DeepSeekV3ModelArgs:
     # ~976M total params (dense 387M + all-experts sparse 589M; ~584M active per
     # forward pass with top_k=2 of 8 experts). At fp32, weights+grads+AdamW states
@@ -572,6 +622,9 @@ config_map = {
     "bench_scale_1gpu": get_deepseek_v3_bench_scale_1gpu_config,
     "bench_scale_2gpu": get_deepseek_v3_bench_scale_2gpu_config,
     "bench_scale_4gpu": get_deepseek_v3_bench_scale_4gpu_config,
+    "bench_par_ddp_4gpu": get_deepseek_v3_bench_par_ddp_4gpu_config,
+    "bench_par_fsdp_4gpu": get_deepseek_v3_bench_par_fsdp_4gpu_config,
+    "bench_par_hsdp_4gpu": get_deepseek_v3_bench_par_hsdp_4gpu_config,
     "bench_ga8_1gpu": get_deepseek_v3_bench_ga8_1gpu_config,
     "bench_ga8_2gpu": get_deepseek_v3_bench_ga8_2gpu_config,
     "bench_ga8_4gpu": get_deepseek_v3_bench_ga8_4gpu_config,
